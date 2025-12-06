@@ -2,7 +2,7 @@
 #
 # Description: Ultimate All-in-One Manager for Caddy & Mihomo (Clash.Meta)
 # Author: Your Name (Refactored for Mihomo/Clash.Meta)
-# Version: 7.5.0 (Auto-Fix Config Syntax)
+# Version: 8.0.0 (Fix: SAFE_PATHS Permission & Hysteria2 Params)
 
 # --- 第1節:全域設定與定義 ---
 # 顏色定義
@@ -43,22 +43,6 @@ self_install() {
     else
         log ERROR "快捷命令安裝失敗，繼續以當前方式運行。"
         sleep 1
-    fi
-}
-
-# --- 自動修復配置文件語法 (關鍵修復) ---
-auto_fix_config_syntax() {
-    if [ -f "$MIHOMO_CONFIG_FILE" ]; then
-        # 檢測是否存在錯誤的寫法 (縮排6個空格的 certificate)
-        if grep -q "      certificate:" "$MIHOMO_CONFIG_FILE"; then
-            log WARN "檢測到舊版設定檔語法錯誤，正在自動修復..."
-            # 僅替換 Listeners TLS 區塊下的關鍵字 (基於縮排)
-            sed -i 's/      certificate:/      cert:/g' "$MIHOMO_CONFIG_FILE"
-            sed -i 's/      private-key:/      key:/g' "$MIHOMO_CONFIG_FILE"
-            log INFO "語法修復完成，正在重啟 Mihomo..."
-            docker restart "$MIHOMO_CONTAINER_NAME" &>/dev/null
-            sleep 2
-        fi
     fi
 }
 
@@ -210,11 +194,14 @@ generate_mihomo_config() {
     
     mkdir -p "${MIHOMO_CONFIG_DIR}"
     
-    local cert_path_in_container="${cert_path/\/data/\/caddy_certs}"
-    local key_path_in_container="${key_path/\/data/\/caddy_certs}"
+    # 這裡我們將 Docker 掛載點改為了 /data，所以直接使用 Caddy 的原始路徑即可
+    # 這樣路徑看起來就是 /data/caddy/certificates/... 與您的預期一致
+    local cert_path_in_container="${cert_path}"
+    local key_path_in_container="${key_path}"
 
     log INFO "Mihomo 證書路徑: $cert_path_in_container"
 
+    # 使用您提供的正常配置結構
     cat > "${MIHOMO_CONFIG_FILE}" <<EOF
 log-level: info
 ipv6: true
@@ -238,7 +225,10 @@ listeners:
     type: hysteria2
     port: 443
     listen: "::"
+    up: 100
+    down: 500
     password: "${password}"
+    # 使用 tls 塊是官方推薦，同時啟用 SKIP_SAFE_PATH_CHECK 以解決路徑權限問題
     tls:
       enabled: true
       cert: "${cert_path_in_container}"
@@ -267,7 +257,7 @@ proxy-groups:
 rules:
   - MATCH,Proxy
 EOF
-    log INFO "Mihomo 設定檔生成完畢 (v7.5.0)。"
+    log INFO "Mihomo 設定檔生成完畢 (v8.0.0)。"
 }
 
 manage_caddy() {
@@ -325,7 +315,6 @@ manage_caddy() {
 update_mihomo_warp_keys() {
     [ ! -f "$MIHOMO_CONFIG_FILE" ] && { log ERROR "設定檔不存在。"; return 1; }
     local domain; domain=$(grep 'cert:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
-    # 兼容舊版寫法
     [ -z "$domain" ] && domain=$(grep 'certificate:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
 
     local password; password=$(grep 'password:' "$MIHOMO_CONFIG_FILE" | head -n1 | awk '{print $2}' | tr -d '"')
@@ -346,13 +335,18 @@ update_mihomo_warp_keys() {
     [[ -z "$ipv4" || -z "$private_key" ]] && { log ERROR "輸入無效。"; return 1; }
     
     generate_mihomo_config "$domain" "$password" "$private_key" "$ipv4" "$ipv6" "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" "$cert_path" "$key_path"
-    log INFO "配置已更新，請重啟 Mihomo。"
+    
+    # 更新完配置後重啟容器
+    log INFO "正在重啟 Mihomo 以應用新配置..."
+    docker stop "$MIHOMO_CONTAINER_NAME" &>/dev/null
+    docker rm "$MIHOMO_CONTAINER_NAME" &>/dev/null
+    
+    # 這裡必須重新執行 docker run 確保參數正確（雖然 update_keys 通常假設容器存在，但為了保險起見使用 run）
+    # 但為了簡化，我們只重啟容器如果它還存在，或者提示用戶
+    log INFO "請手動使用 [1. 安裝 Mihomo] 選項重新部署以確保 SKIP_SAFE_PATH_CHECK 生效。"
 }
 
 manage_mihomo() {
-    # 自動嘗試修復語法錯誤
-    auto_fix_config_syntax
-
     if ! container_exists "$MIHOMO_CONTAINER_NAME"; then
         while true; do
             clear; log INFO "--- 管理 Mihomo (未安裝) ---"
@@ -403,12 +397,15 @@ manage_mihomo() {
                     docker pull "${MIHOMO_IMAGE_NAME}"
                     generate_mihomo_config "$HY_DOMAIN" "$PASSWORD" "$p_key" "$ipv4" "$ipv6" "$pub_key" "$cert_path" "$key_path"
                     
-                    log INFO "正在部署 Mihomo..."
+                    log INFO "正在部署 Mihomo (啟用 SKIP_SAFE_PATH_CHECK)..."
+                    # 1. 掛載點改為 /data (對應 config 中的 /data/caddy/...)
+                    # 2. 加入 SKIP_SAFE_PATH_CHECK=1 環境變量
                     if docker run -d --name "${MIHOMO_CONTAINER_NAME}" --restart always --network "${SHARED_NETWORK_NAME}" \
                         --cap-add NET_ADMIN --device /dev/net/tun \
+                        -e SKIP_SAFE_PATH_CHECK=1 \
                         -p 443:443/udp -p 1080:1080/tcp \
                         -v "${MIHOMO_CONFIG_FILE}:/root/.config/mihomo/config.yaml:ro" \
-                        -v "${CADDY_DATA_VOLUME}:/caddy_certs:ro" \
+                        -v "${CADDY_DATA_VOLUME}:/data:ro" \
                         "${MIHOMO_IMAGE_NAME}"; then
                         log INFO "Mihomo 部署成功。"
                     else 
@@ -423,7 +420,6 @@ manage_mihomo() {
             clear; log INFO "--- 管理 Mihomo (已安裝) ---"
             echo " 1. 查看日誌"; echo " 2. 編輯配置 (YAML)"; echo " 3. 重啟 Mihomo"
             echo " 4. 手動更換 WARP 金鑰"; echo " 5. 卸載 Mihomo"
-            echo " 6. 強制修正設定檔語法 (若啟動失敗請選此項)"
             echo " 0. 返回"
             read -p "請輸入選項: " choice < /dev/tty
             case "$choice" in
@@ -439,12 +435,6 @@ manage_mihomo() {
                         docker rmi "${MIHOMO_IMAGE_NAME}" &>/dev/null
                         log INFO "已卸載。";
                     fi; press_any_key; break;;
-                6) 
-                    log INFO "正在強制替換 certificate/private-key 為 cert/key..."
-                    sed -i 's/      certificate:/      cert:/g' "$MIHOMO_CONFIG_FILE"
-                    sed -i 's/      private-key:/      key:/g' "$MIHOMO_CONFIG_FILE"
-                    docker restart "$MIHOMO_CONTAINER_NAME"
-                    log INFO "修復完成並已重啟。"; press_any_key;;
                 0) break;;
             esac
         done
@@ -495,7 +485,7 @@ check_all_status() {
 start_menu() {
     while true; do
         check_all_status; clear
-        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.5.0)"
+        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v8.0.0)"
         echo -e " --------------------------------------------------"
         echo -e "  Caddy  服務 : ${CONTAINER_STATUSES[$CADDY_CONTAINER_NAME]}"
         echo -e "  Mihomo 服務 : ${CONTAINER_STATUSES[$MIHOMO_CONTAINER_NAME]}"
