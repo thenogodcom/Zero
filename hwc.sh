@@ -2,12 +2,9 @@
 #
 # Description: Ultimate All-in-One Manager for Caddy & Mihomo (Clash.Meta)
 # Author: Your Name (Refactored for Mihomo/Clash.Meta)
-# Version: 7.4.0 (Fix: Startup Exit Issue)
+# Version: 7.5.0 (Auto-Fix Config Syntax)
 
 # --- 第1節:全域設定與定義 ---
-# 移除 set -eo pipefail 以防止腳本在環境檢查時意外退出
-# set -eo pipefail 
-
 # 顏色定義
 FontColor_Red="\033[31m"; FontColor_Green="\033[32m"; FontColor_Yellow="\033[33m"
 FontColor_Purple="\033[35m"; FontColor_Suffix="\033[0m"
@@ -35,22 +32,33 @@ declare -A CONTAINER_STATUSES
 self_install() {
     local running_script_path
     if [[ -f "$0" ]]; then running_script_path=$(readlink -f "$0"); fi
-    
-    # 如果已經是快捷路徑，直接返回
     if [ "$running_script_path" = "$SHORTCUT_PATH" ]; then return 0; fi
 
-    # 確保快捷目錄存在
     mkdir -p /usr/local/bin
-
     log INFO "首次運行: 正在安裝 'hwc' 快捷命令..."
     if cp "$0" "${SHORTCUT_PATH}"; then
         chmod +x "${SHORTCUT_PATH}"
-        log INFO "安裝成功！您以後可以直接輸入 'hwc' 來管理。"
-        log INFO "正在切換到新路徑運行..."
+        log INFO "安裝成功！正在切換到新路徑運行..."
         exec "${SHORTCUT_PATH}" "$@"
     else
-        log ERROR "快捷命令安裝失敗，將繼續以當前方式運行。"
+        log ERROR "快捷命令安裝失敗，繼續以當前方式運行。"
         sleep 1
+    fi
+}
+
+# --- 自動修復配置文件語法 (關鍵修復) ---
+auto_fix_config_syntax() {
+    if [ -f "$MIHOMO_CONFIG_FILE" ]; then
+        # 檢測是否存在錯誤的寫法 (縮排6個空格的 certificate)
+        if grep -q "      certificate:" "$MIHOMO_CONFIG_FILE"; then
+            log WARN "檢測到舊版設定檔語法錯誤，正在自動修復..."
+            # 僅替換 Listeners TLS 區塊下的關鍵字 (基於縮排)
+            sed -i 's/      certificate:/      cert:/g' "$MIHOMO_CONFIG_FILE"
+            sed -i 's/      private-key:/      key:/g' "$MIHOMO_CONFIG_FILE"
+            log INFO "語法修復完成，正在重啟 Mihomo..."
+            docker restart "$MIHOMO_CONTAINER_NAME" &>/dev/null
+            sleep 2
+        fi
     fi
 }
 
@@ -66,7 +74,6 @@ validate_backend_service() {
     [[ "$1" =~ ^[a-zA-Z0-9\._-]+:[0-9]+$ ]] || { log ERROR "後端服務地址格式無效: $1"; return 1; }
 }
 
-# 等待並檢測證書路徑
 wait_and_detect_cert() {
     local domain="$1"
     local base_path_caddy="/data/caddy/certificates"
@@ -119,7 +126,7 @@ generate_random_password() {
 install_docker() {
     log INFO "正在安裝 Docker..."
     if ! curl -fsSL https://get.docker.com | sh; then
-        log ERROR "Docker 安裝腳本執行失敗，請手動安裝 Docker。"
+        log ERROR "Docker 安裝失敗，請手動安裝。"
         exit 1
     fi
     systemctl start docker 2>/dev/null
@@ -129,17 +136,10 @@ install_docker() {
 check_root() { [ "$EUID" -ne 0 ] && { log ERROR "必須以 root 身份運行"; exit 1; }; }
 
 check_docker() {
-    if ! command -v docker &>/dev/null; then
-        install_docker
-    fi
+    command -v docker &>/dev/null || install_docker
     if ! docker info >/dev/null 2>&1; then
-        log WARN "Docker 服務似乎未運行，正在嘗試啟動..."
         systemctl start docker 2>/dev/null || service docker start 2>/dev/null
         sleep 3
-        if ! docker info >/dev/null 2>&1; then
-            log ERROR "無法啟動 Docker，請手動檢查 Docker 服務狀態。"
-            # 不強制退出，嘗試繼續顯示選單
-        fi
     fi
 }
 
@@ -267,7 +267,7 @@ proxy-groups:
 rules:
   - MATCH,Proxy
 EOF
-    log INFO "Mihomo 設定檔生成完畢。"
+    log INFO "Mihomo 設定檔生成完畢 (v7.5.0)。"
 }
 
 manage_caddy() {
@@ -325,6 +325,9 @@ manage_caddy() {
 update_mihomo_warp_keys() {
     [ ! -f "$MIHOMO_CONFIG_FILE" ] && { log ERROR "設定檔不存在。"; return 1; }
     local domain; domain=$(grep 'cert:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
+    # 兼容舊版寫法
+    [ -z "$domain" ] && domain=$(grep 'certificate:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
+
     local password; password=$(grep 'password:' "$MIHOMO_CONFIG_FILE" | head -n1 | awk '{print $2}' | tr -d '"')
     
     local cert_path_info; cert_path_info=$(wait_and_detect_cert "$domain")
@@ -347,6 +350,9 @@ update_mihomo_warp_keys() {
 }
 
 manage_mihomo() {
+    # 自動嘗試修復語法錯誤
+    auto_fix_config_syntax
+
     if ! container_exists "$MIHOMO_CONTAINER_NAME"; then
         while true; do
             clear; log INFO "--- 管理 Mihomo (未安裝) ---"
@@ -416,7 +422,9 @@ manage_mihomo() {
         while true; do
             clear; log INFO "--- 管理 Mihomo (已安裝) ---"
             echo " 1. 查看日誌"; echo " 2. 編輯配置 (YAML)"; echo " 3. 重啟 Mihomo"
-            echo " 4. 手動更換 WARP 金鑰"; echo " 5. 卸載 Mihomo"; echo " 0. 返回"
+            echo " 4. 手動更換 WARP 金鑰"; echo " 5. 卸載 Mihomo"
+            echo " 6. 強制修正設定檔語法 (若啟動失敗請選此項)"
+            echo " 0. 返回"
             read -p "請輸入選項: " choice < /dev/tty
             case "$choice" in
                 1) docker logs -f "$MIHOMO_CONTAINER_NAME"; press_any_key;;
@@ -431,6 +439,12 @@ manage_mihomo() {
                         docker rmi "${MIHOMO_IMAGE_NAME}" &>/dev/null
                         log INFO "已卸載。";
                     fi; press_any_key; break;;
+                6) 
+                    log INFO "正在強制替換 certificate/private-key 為 cert/key..."
+                    sed -i 's/      certificate:/      cert:/g' "$MIHOMO_CONFIG_FILE"
+                    sed -i 's/      private-key:/      key:/g' "$MIHOMO_CONFIG_FILE"
+                    docker restart "$MIHOMO_CONTAINER_NAME"
+                    log INFO "修復完成並已重啟。"; press_any_key;;
                 0) break;;
             esac
         done
@@ -481,7 +495,7 @@ check_all_status() {
 start_menu() {
     while true; do
         check_all_status; clear
-        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.4.0)"
+        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.5.0)"
         echo -e " --------------------------------------------------"
         echo -e "  Caddy  服務 : ${CONTAINER_STATUSES[$CADDY_CONTAINER_NAME]}"
         echo -e "  Mihomo 服務 : ${CONTAINER_STATUSES[$MIHOMO_CONTAINER_NAME]}"
