@@ -25,7 +25,7 @@ log() {
 # 基礎目錄與變數
 APP_BASE_DIR="/root/hwc"
 CADDY_CONTAINER_NAME="caddy-manager"; CADDY_IMAGE_NAME="caddy:latest"; CADDY_CONFIG_DIR="${APP_BASE_DIR}/caddy"; CADDY_CONFIG_FILE="${CADDY_CONFIG_DIR}/Caddyfile"; CADDY_DATA_VOLUME="hwc_caddy_data"
-MIHOMO_CONTAINER_NAME="mihomo"; MIHOMO_IMAGE_NAME="metacubex/mihomo:latest"; MIHOMO_CONFIG_DIR="${APP_BASE_DIR}/mihomo"; MIHOMO_CONFIG_FILE="${MIHOMO_CONFIG_DIR}/config.yaml"
+MIHOMO_CONTAINER_NAME="mihomo"; MIHOMO_IMAGE_NAME="metacubex/mihomo:Alpha"; MIHOMO_CONFIG_DIR="${APP_BASE_DIR}/mihomo"; MIHOMO_CONFIG_FILE="${MIHOMO_CONFIG_DIR}/config.yaml"
 SHARED_NETWORK_NAME="hwc-proxy-net"
 SCRIPT_URL="https://raw.githubusercontent.com/thenogodcom/warp/main/hwc.sh"; SHORTCUT_PATH="/usr/local/bin/hwc"
 declare -A CONTAINER_STATUSES
