@@ -2,13 +2,14 @@
 #
 # Description: Ultimate All-in-One Manager for Caddy & Mihomo (Clash.Meta)
 # Author: Your Name (Refactored for Mihomo/Clash.Meta)
-# Version: 8.0.0 (Fix: SAFE_PATHS Permission & Hysteria2 Params)
+# Version: 8.3.0 (UUID-format Password & Strict Config)
 
 # --- 第1節:全域設定與定義 ---
 # 顏色定義
 FontColor_Red="\033[31m"; FontColor_Green="\033[32m"; FontColor_Yellow="\033[33m"
 FontColor_Purple="\033[35m"; FontColor_Suffix="\033[0m"
 
+# 日誌輸出到 stderr
 log() {
     local LEVEL="$1"; local MSG="$2"
     case "${LEVEL}" in
@@ -16,13 +17,13 @@ log() {
         WARN)  local LEVEL="[${FontColor_Yellow}警告${FontColor_Suffix}]";;
         ERROR) local LEVEL="[${FontColor_Red}錯誤${FontColor_Suffix}]";;
     esac
-    echo -e "${LEVEL} ${MSG}"
+    echo -e "${LEVEL} ${MSG}" >&2
 }
 
 # 基礎目錄與變數
 APP_BASE_DIR="/root/hwc"
 CADDY_CONTAINER_NAME="caddy-manager"; CADDY_IMAGE_NAME="caddy:latest"; CADDY_CONFIG_DIR="${APP_BASE_DIR}/caddy"; CADDY_CONFIG_FILE="${CADDY_CONFIG_DIR}/Caddyfile"; CADDY_DATA_VOLUME="hwc_caddy_data"
-MIHOMO_CONTAINER_NAME="mihomo"; MIHOMO_IMAGE_NAME="metacubex/mihomo:Alpha"; MIHOMO_CONFIG_DIR="${APP_BASE_DIR}/mihomo"; MIHOMO_CONFIG_FILE="${MIHOMO_CONFIG_DIR}/config.yaml"
+MIHOMO_CONTAINER_NAME="mihomo"; MIHOMO_IMAGE_NAME="metacubex/mihomo:latest"; MIHOMO_CONFIG_DIR="${APP_BASE_DIR}/mihomo"; MIHOMO_CONFIG_FILE="${MIHOMO_CONFIG_DIR}/config.yaml"
 SHARED_NETWORK_NAME="hwc-proxy-net"
 SCRIPT_URL="https://raw.githubusercontent.com/thenogodcom/warp/main/hwc.sh"; SHORTCUT_PATH="/usr/local/bin/hwc"
 declare -A CONTAINER_STATUSES
@@ -100,11 +101,14 @@ wait_and_detect_cert() {
     return 0
 }
 
+# [重要修改] 生成 8-4-4-4-12 格式的隨機密碼
 generate_random_password() {
     local p1=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 8)
     local p2=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 4)
-    local p3=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 12)
-    echo "${p1}-${p2}-${p3}"
+    local p3=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 4)
+    local p4=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 4)
+    local p5=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 12)
+    echo "${p1}-${p2}-${p3}-${p4}-${p5}"
 }
 
 install_docker() {
@@ -194,14 +198,11 @@ generate_mihomo_config() {
     
     mkdir -p "${MIHOMO_CONFIG_DIR}"
     
-    # 這裡我們將 Docker 掛載點改為了 /data，所以直接使用 Caddy 的原始路徑即可
-    # 這樣路徑看起來就是 /data/caddy/certificates/... 與您的預期一致
     local cert_path_in_container="${cert_path}"
     local key_path_in_container="${key_path}"
 
     log INFO "Mihomo 證書路徑: $cert_path_in_container"
 
-    # 使用您提供的正常配置結構
     cat > "${MIHOMO_CONFIG_FILE}" <<EOF
 log-level: info
 ipv6: true
@@ -225,16 +226,16 @@ listeners:
     type: hysteria2
     port: 443
     listen: "::"
-    up: 100
+    up: 500
     down: 500
-    password: "${password}"
-    # 使用 tls 塊是官方推薦，同時啟用 SKIP_SAFE_PATH_CHECK 以解決路徑權限問題
-    tls:
-      enabled: true
-      cert: "${cert_path_in_container}"
-      key: "${key_path_in_container}"
-      alpn:
-        - h3
+    users:
+      "": "${password}"
+    congestion:
+      type: bruteloss
+    certificate: "${cert_path_in_container}"
+    private-key: "${key_path_in_container}"
+    alpn:
+      - h3
 
 proxies:
   - name: WARP
@@ -257,7 +258,7 @@ proxy-groups:
 rules:
   - MATCH,Proxy
 EOF
-    log INFO "Mihomo 設定檔生成完畢 (v8.0.0)。"
+    log INFO "Mihomo 設定檔生成完畢 (v8.3.0)。"
 }
 
 manage_caddy() {
@@ -314,10 +315,11 @@ manage_caddy() {
 
 update_mihomo_warp_keys() {
     [ ! -f "$MIHOMO_CONFIG_FILE" ] && { log ERROR "設定檔不存在。"; return 1; }
-    local domain; domain=$(grep 'cert:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
-    [ -z "$domain" ] && domain=$(grep 'certificate:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
+    local domain; domain=$(grep 'certificate:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
+    [ -z "$domain" ] && domain=$(grep 'cert:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
 
-    local password; password=$(grep 'password:' "$MIHOMO_CONFIG_FILE" | head -n1 | awk '{print $2}' | tr -d '"')
+    local password; password=$(grep '"":' "$MIHOMO_CONFIG_FILE" | head -n1 | awk -F'"' '{print $4}')
+    [ -z "$password" ] && password=$(grep 'password:' "$MIHOMO_CONFIG_FILE" | head -n1 | awk '{print $2}' | tr -d '"')
     
     local cert_path_info; cert_path_info=$(wait_and_detect_cert "$domain")
     if [ $? -ne 0 ]; then log ERROR "無法驗證證書路徑，請檢查 Caddy。"; return 1; fi
@@ -336,14 +338,9 @@ update_mihomo_warp_keys() {
     
     generate_mihomo_config "$domain" "$password" "$private_key" "$ipv4" "$ipv6" "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" "$cert_path" "$key_path"
     
-    # 更新完配置後重啟容器
     log INFO "正在重啟 Mihomo 以應用新配置..."
-    docker stop "$MIHOMO_CONTAINER_NAME" &>/dev/null
-    docker rm "$MIHOMO_CONTAINER_NAME" &>/dev/null
-    
-    # 這裡必須重新執行 docker run 確保參數正確（雖然 update_keys 通常假設容器存在，但為了保險起見使用 run）
-    # 但為了簡化，我們只重啟容器如果它還存在，或者提示用戶
-    log INFO "請手動使用 [1. 安裝 Mihomo] 選項重新部署以確保 SKIP_SAFE_PATH_CHECK 生效。"
+    docker restart "$MIHOMO_CONTAINER_NAME" &>/dev/null
+    log INFO "配置已更新。"
 }
 
 manage_mihomo() {
@@ -398,8 +395,6 @@ manage_mihomo() {
                     generate_mihomo_config "$HY_DOMAIN" "$PASSWORD" "$p_key" "$ipv4" "$ipv6" "$pub_key" "$cert_path" "$key_path"
                     
                     log INFO "正在部署 Mihomo (啟用 SKIP_SAFE_PATH_CHECK)..."
-                    # 1. 掛載點改為 /data (對應 config 中的 /data/caddy/...)
-                    # 2. 加入 SKIP_SAFE_PATH_CHECK=1 環境變量
                     if docker run -d --name "${MIHOMO_CONTAINER_NAME}" --restart always --network "${SHARED_NETWORK_NAME}" \
                         --cap-add NET_ADMIN --device /dev/net/tun \
                         -e SKIP_SAFE_PATH_CHECK=1 \
@@ -485,7 +480,7 @@ check_all_status() {
 start_menu() {
     while true; do
         check_all_status; clear
-        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v8.0.0)"
+        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v8.3.0)"
         echo -e " --------------------------------------------------"
         echo -e "  Caddy  服務 : ${CONTAINER_STATUSES[$CADDY_CONTAINER_NAME]}"
         echo -e "  Mihomo 服務 : ${CONTAINER_STATUSES[$MIHOMO_CONTAINER_NAME]}"
@@ -506,9 +501,19 @@ start_menu() {
     done
 }
 
-# --- 第3節:腳本入口 ---
+# --- 第3節:腳本入口 (主邏輯) ---
 clear
+cat <<-'EOM'
+  ____      _        __          __      _   _             _             _
+ / ___|__ _| |_ __ _ \ \        / /     | | | |           | |           (_)
+| |   / _` | __/ _` | \ \  /\  / /  __ _| |_| |_ ___ _ __ | |_ __ _ _ __ _  ___
+| |__| (_| | || (_| |  \ \/  \/ /  / _` | __| __/ _ \ '_ \| __/ _` | '__| |/ __|
+ \____\__,_|\__\__,_|   \  /\  /  | (_| | |_| ||  __/ | | | || (_| | |  | | (__
+                        \/  \/    \__,_|\__|\__\___|_| |_|\__\__,_|_|  |_|\___|
+EOM
 echo -e "${FontColor_Purple}Caddy + Mihomo Manager${FontColor_Suffix}"
+echo "----------------------------------------------------------------"
+
 check_root
 self_install "$@"
 check_docker
