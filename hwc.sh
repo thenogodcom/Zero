@@ -2,7 +2,7 @@
 #
 # Description: Ultimate All-in-One Manager for Caddy & Mihomo (Clash.Meta)
 # Author: Your Name (Refactored for Mihomo/Clash.Meta)
-# Version: 8.3.0 (UUID-format Password & Strict Config)
+# Version: 8.4.0 (Added Hysteria2 Obfuscation)
 
 # --- 第1節:全域設定與定義 ---
 # 顏色定義
@@ -101,13 +101,23 @@ wait_and_detect_cert() {
     return 0
 }
 
-# [重要修改] 生成 8-4-4-4-12 格式的隨機密碼
+# 連接密碼: 小寫+數字, 8-4-4-4-12
 generate_random_password() {
     local p1=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 8)
     local p2=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 4)
     local p3=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 4)
     local p4=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 4)
     local p5=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 12)
+    echo "${p1}-${p2}-${p3}-${p4}-${p5}"
+}
+
+# [新增] 混淆密碼: 大寫+數字, 8-4-4-4-12 (參照範例 A1B2C3D4...)
+generate_obfs_password() {
+    local p1=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 8)
+    local p2=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 4)
+    local p3=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 4)
+    local p4=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 4)
+    local p5=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 12)
     echo "${p1}-${p2}-${p3}-${p4}-${p5}"
 }
 
@@ -193,8 +203,9 @@ generate_warp_conf() {
     log INFO "WARP 帳戶已生成。"
 }
 
+# [修改] 增加 obfs_password 參數
 generate_mihomo_config() {
-    local domain="$1" password="$2" p_key="$3" ipv4="$4" ipv6="$5" pub_key="$6" cert_path="$7" key_path="$8"
+    local domain="$1" password="$2" p_key="$3" ipv4="$4" ipv6="$5" pub_key="$6" cert_path="$7" key_path="$8" obfs_password="$9"
     
     mkdir -p "${MIHOMO_CONFIG_DIR}"
     
@@ -230,6 +241,8 @@ listeners:
     down: 500
     users:
       "": "${password}"
+    obfs: "salamander"
+    obfs-password: "${obfs_password}"
     congestion:
       type: bruteloss
     certificate: "${cert_path_in_container}"
@@ -258,7 +271,7 @@ proxy-groups:
 rules:
   - MATCH,Proxy
 EOF
-    log INFO "Mihomo 設定檔生成完畢 (v8.3.0)。"
+    log INFO "Mihomo 設定檔生成完畢 (v8.4.0)。"
 }
 
 manage_caddy() {
@@ -321,6 +334,10 @@ update_mihomo_warp_keys() {
     local password; password=$(grep '"":' "$MIHOMO_CONFIG_FILE" | head -n1 | awk -F'"' '{print $4}')
     [ -z "$password" ] && password=$(grep 'password:' "$MIHOMO_CONFIG_FILE" | head -n1 | awk '{print $2}' | tr -d '"')
     
+    # [新增] 嘗試保留舊的混淆密碼，如果找不到則生成新的
+    local obfs_password; obfs_password=$(grep 'obfs-password:' "$MIHOMO_CONFIG_FILE" | head -n1 | awk '{print $2}' | tr -d '"')
+    [ -z "$obfs_password" ] && obfs_password=$(generate_obfs_password)
+
     local cert_path_info; cert_path_info=$(wait_and_detect_cert "$domain")
     if [ $? -ne 0 ]; then log ERROR "無法驗證證書路徑，請檢查 Caddy。"; return 1; fi
     local cert_path="${cert_path_info%%|*}"
@@ -336,7 +353,7 @@ update_mihomo_warp_keys() {
     
     [[ -z "$ipv4" || -z "$private_key" ]] && { log ERROR "輸入無效。"; return 1; }
     
-    generate_mihomo_config "$domain" "$password" "$private_key" "$ipv4" "$ipv6" "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" "$cert_path" "$key_path"
+    generate_mihomo_config "$domain" "$password" "$private_key" "$ipv4" "$ipv6" "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" "$cert_path" "$key_path" "$obfs_password"
     
     log INFO "正在重啟 Mihomo 以應用新配置..."
     docker restart "$MIHOMO_CONTAINER_NAME" &>/dev/null
@@ -347,7 +364,7 @@ manage_mihomo() {
     if ! container_exists "$MIHOMO_CONTAINER_NAME"; then
         while true; do
             clear; log INFO "--- 管理 Mihomo (未安裝) ---"
-            echo " 1. 安裝 Mihomo (Hysteria2 + WARP)"; echo " 0. 返回"
+            echo " 1. 安裝 Mihomo (Hysteria2 + WARP + OBFS)"; echo " 0. 返回"
             read -p "請輸入選項: " choice < /dev/tty
             case "$choice" in
                 1)
@@ -371,7 +388,9 @@ manage_mihomo() {
                     local key_path="${cert_path_info##*|}"
 
                     local PASSWORD=$(generate_random_password)
-                    log INFO "已生成密碼: ${FontColor_Yellow}${PASSWORD}${FontColor_Suffix}"
+                    local OBFS_PASSWORD=$(generate_obfs_password)
+                    log INFO "已生成連接密碼: ${FontColor_Yellow}${PASSWORD}${FontColor_Suffix}"
+                    log INFO "已生成混淆密碼: ${FontColor_Yellow}${OBFS_PASSWORD}${FontColor_Suffix}"
                     
                     local p_key ipv4 ipv6 pub_key
                     read -p "自動生成 WARP 帳戶? (Y/n): " AUTO_WARP < /dev/tty
@@ -392,7 +411,7 @@ manage_mihomo() {
                     
                     log INFO "正在拉取 Mihomo 鏡像..."
                     docker pull "${MIHOMO_IMAGE_NAME}"
-                    generate_mihomo_config "$HY_DOMAIN" "$PASSWORD" "$p_key" "$ipv4" "$ipv6" "$pub_key" "$cert_path" "$key_path"
+                    generate_mihomo_config "$HY_DOMAIN" "$PASSWORD" "$p_key" "$ipv4" "$ipv6" "$pub_key" "$cert_path" "$key_path" "$OBFS_PASSWORD"
                     
                     log INFO "正在部署 Mihomo (啟用 SKIP_SAFE_PATH_CHECK)..."
                     if docker run -d --name "${MIHOMO_CONTAINER_NAME}" --restart always --network "${SHARED_NETWORK_NAME}" \
@@ -480,7 +499,7 @@ check_all_status() {
 start_menu() {
     while true; do
         check_all_status; clear
-        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v8.3.0)"
+        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v8.4.0)"
         echo -e " --------------------------------------------------"
         echo -e "  Caddy  服務 : ${CONTAINER_STATUSES[$CADDY_CONTAINER_NAME]}"
         echo -e "  Mihomo 服務 : ${CONTAINER_STATUSES[$MIHOMO_CONTAINER_NAME]}"
