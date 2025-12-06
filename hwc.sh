@@ -304,7 +304,7 @@ manage_singbox_warp() {
             log INFO "正在拉取 Sing-box 鏡像..."; docker pull "$SB_WARP_IMAGE_NAME"
             generate_singbox_config "$pk" "${ip6}/128"
             docker network create "${SHARED_NETWORK_NAME}" &>/dev/null
-            docker run -d --name "$SB_WARP_CONTAINER_NAME" -e ENABLE_DEPRECATED_WIREGUGARD_OUTBOUND=true --restart always --network "${SHARED_NETWORK_NAME}" --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv4.conf.all.src_valid_mark=1 -v "${SB_WARP_CONFIG_FILE}:/etc/sing-box/config.json:ro" "$SB_WARP_IMAGE_NAME" run -c /etc/sing-box/config.json
+            docker run -d --name "$SB_WARP_CONTAINER_NAME" -e ENABLE_DEPRECATED_WIREGUARD_OUTBOUND=true --restart always --network "${SHARED_NETWORK_NAME}" --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv4.conf.all.src_valid_mark=1 -v "${SB_WARP_CONFIG_FILE}:/etc/sing-box/config.json:ro" "$SB_WARP_IMAGE_NAME" run -c /etc/sing-box/config.json
             log INFO "Sing-box (WARP) 部署成功。"; press_any_key; break
         done
     else
