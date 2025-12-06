@@ -2,7 +2,7 @@
 #
 # Description: Ultimate All-in-One Manager for Caddy & Mihomo (Clash.Meta)
 # Author: Your Name (Refactored for Mihomo/Clash.Meta)
-# Version: 7.2.0 (Fix: YAML Syntax cert/key)
+# Version: 7.3.0 (Fix: YAML Keywords cert/key)
 
 # --- 第1節:全域設定與定義 ---
 set -eo pipefail
@@ -195,13 +195,13 @@ generate_mihomo_config() {
     
     mkdir -p "${MIHOMO_CONFIG_DIR}"
     
-    # 路徑轉換：將 Caddy 內部路徑 (/data) 轉換為 Mihomo 內部路徑 (/caddy_certs)
+    # 路徑轉換
     local cert_path_in_container="${cert_path/\/data/\/caddy_certs}"
     local key_path_in_container="${key_path/\/data/\/caddy_certs}"
 
-    log INFO "Mihomo 證書路徑設定為: $cert_path_in_container"
+    log INFO "Mihomo 證書路徑: $cert_path_in_container"
 
-    # 注意：listeners 下的 tls 必須使用 cert 和 key (短命名)，而非 certificate 和 private-key
+    # ！！！關鍵修正：listeners 中必須使用 cert 和 key (短命名) ！！！
     cat > "${MIHOMO_CONFIG_FILE}" <<EOF
 log-level: info
 ipv6: true
@@ -468,7 +468,7 @@ check_all_status() {
 start_menu() {
     while true; do
         check_all_status; clear
-        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.2.0)"
+        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.3.0)"
         echo -e " --------------------------------------------------"
         echo -e "  Caddy  服務 : ${CONTAINER_STATUSES[$CADDY_CONTAINER_NAME]}"
         echo -e "  Mihomo 服務 : ${CONTAINER_STATUSES[$MIHOMO_CONTAINER_NAME]}"
