@@ -113,11 +113,11 @@ generate_random_password() {
 
 # [新增] 混淆密碼: 大寫+數字, 8-4-4-4-12 (參照範例 A1B2C3D4...)
 generate_obfs_password() {
-    local p1=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 8)
-    local p2=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 4)
+    local p1=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 12)
+    local p2=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 8)
     local p3=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 4)
     local p4=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 4)
-    local p5=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 12)
+    local p5=$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 4)
     echo "${p1}-${p2}-${p3}-${p4}-${p5}"
 }
 
