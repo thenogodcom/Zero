@@ -2,10 +2,11 @@
 #
 # Description: Ultimate All-in-One Manager for Caddy & Mihomo (Clash.Meta)
 # Author: Your Name (Refactored for Mihomo/Clash.Meta)
-# Version: 7.3.0 (Fix: YAML Keywords cert/key)
+# Version: 7.4.0 (Fix: Startup Exit Issue)
 
 # --- 第1節:全域設定與定義 ---
-set -eo pipefail
+# 移除 set -eo pipefail 以防止腳本在環境檢查時意外退出
+# set -eo pipefail 
 
 # 顏色定義
 FontColor_Red="\033[31m"; FontColor_Green="\033[32m"; FontColor_Yellow="\033[33m"
@@ -32,22 +33,24 @@ declare -A CONTAINER_STATUSES
 # --- 第2節:所有函數定義 ---
 
 self_install() {
-    local args_string; printf -v args_string '%q ' "$@"
-    local running_script_path; if [[ -f "$0" ]]; then running_script_path=$(readlink -f "$0"); fi
+    local running_script_path
+    if [[ -f "$0" ]]; then running_script_path=$(readlink -f "$0"); fi
+    
+    # 如果已經是快捷路徑，直接返回
     if [ "$running_script_path" = "$SHORTCUT_PATH" ]; then return 0; fi
 
-    log INFO "首次運行設定:正在安裝 'hwc' 快捷命令..."
-    if ! command -v curl &>/dev/null; then
-        if command -v apt-get &>/dev/null; then apt-get update && apt-get install -y curl; fi
-        if command -v yum &>/dev/null; then yum install -y curl; fi
-    fi
+    # 確保快捷目錄存在
+    mkdir -p /usr/local/bin
+
+    log INFO "首次運行: 正在安裝 'hwc' 快捷命令..."
     if cp "$0" "${SHORTCUT_PATH}"; then
         chmod +x "${SHORTCUT_PATH}"
-        log INFO "快捷命令 'hwc' 安裝成功。正在從新位置重新啟動..."
-        exec "${SHORTCUT_PATH}" $args_string
+        log INFO "安裝成功！您以後可以直接輸入 'hwc' 來管理。"
+        log INFO "正在切換到新路徑運行..."
+        exec "${SHORTCUT_PATH}" "$@"
     else
-        log ERROR "無法安裝 'hwc' 快捷命令。"
-        sleep 2
+        log ERROR "快捷命令安裝失敗，將繼續以當前方式運行。"
+        sleep 1
     fi
 }
 
@@ -80,7 +83,6 @@ wait_and_detect_cert() {
             return 1
         fi
 
-        # 檢查 Let's Encrypt 和 ZeroSSL
         for ca_dir in "acme-v02.api.letsencrypt.org-directory" "acme.zerossl.com-v2-DV90"; do
             local cert_file="$base_path_caddy/$ca_dir/$domain/$domain.crt"
             local key_file="$base_path_caddy/$ca_dir/$domain/$domain.key"
@@ -93,7 +95,6 @@ wait_and_detect_cert() {
         done
 
         log WARN "證書尚未生成 (嘗試 $(($count + 1))/$max_retries)...等待 3 秒..."
-        log INFO "請確保您的域名已解析到本機 IP，且 80/443 端口已開放。"
         sleep 3
         count=$((count + 1))
     done
@@ -117,15 +118,29 @@ generate_random_password() {
 
 install_docker() {
     log INFO "正在安裝 Docker..."
-    curl -fsSL https://get.docker.com | sh || { log ERROR "Docker 安裝失敗"; exit 1; }
-    systemctl start docker && systemctl enable docker
+    if ! curl -fsSL https://get.docker.com | sh; then
+        log ERROR "Docker 安裝腳本執行失敗，請手動安裝 Docker。"
+        exit 1
+    fi
+    systemctl start docker 2>/dev/null
+    systemctl enable docker 2>/dev/null
 }
 
 check_root() { [ "$EUID" -ne 0 ] && { log ERROR "必須以 root 身份運行"; exit 1; }; }
 
 check_docker() {
-    command -v docker &>/dev/null || install_docker
-    docker info >/dev/null 2>&1 || { systemctl start docker; sleep 3; }
+    if ! command -v docker &>/dev/null; then
+        install_docker
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        log WARN "Docker 服務似乎未運行，正在嘗試啟動..."
+        systemctl start docker 2>/dev/null || service docker start 2>/dev/null
+        sleep 3
+        if ! docker info >/dev/null 2>&1; then
+            log ERROR "無法啟動 Docker，請手動檢查 Docker 服務狀態。"
+            # 不強制退出，嘗試繼續顯示選單
+        fi
+    fi
 }
 
 check_editor() {
@@ -195,13 +210,11 @@ generate_mihomo_config() {
     
     mkdir -p "${MIHOMO_CONFIG_DIR}"
     
-    # 路徑轉換
     local cert_path_in_container="${cert_path/\/data/\/caddy_certs}"
     local key_path_in_container="${key_path/\/data/\/caddy_certs}"
 
     log INFO "Mihomo 證書路徑: $cert_path_in_container"
 
-    # ！！！關鍵修正：listeners 中必須使用 cert 和 key (短命名) ！！！
     cat > "${MIHOMO_CONFIG_FILE}" <<EOF
 log-level: info
 ipv6: true
@@ -468,7 +481,7 @@ check_all_status() {
 start_menu() {
     while true; do
         check_all_status; clear
-        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.3.0)"
+        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.4.0)"
         echo -e " --------------------------------------------------"
         echo -e "  Caddy  服務 : ${CONTAINER_STATUSES[$CADDY_CONTAINER_NAME]}"
         echo -e "  Mihomo 服務 : ${CONTAINER_STATUSES[$MIHOMO_CONTAINER_NAME]}"
