@@ -2,7 +2,7 @@
 #
 # Description: Ultimate All-in-One Manager for Caddy & Mihomo (Clash.Meta)
 # Author: Your Name (Refactored for Mihomo/Clash.Meta)
-# Version: 7.1.0 (Fix: Certificate Wait Logic)
+# Version: 7.2.0 (Fix: YAML Syntax cert/key)
 
 # --- 第1節:全域設定與定義 ---
 set -eo pipefail
@@ -63,13 +63,13 @@ validate_backend_service() {
     [[ "$1" =~ ^[a-zA-Z0-9\._-]+:[0-9]+$ ]] || { log ERROR "後端服務地址格式無效: $1"; return 1; }
 }
 
-# 等待並檢測證書路徑 (關鍵修復)
+# 等待並檢測證書路徑
 wait_and_detect_cert() {
     local domain="$1"
     local base_path_caddy="/data/caddy/certificates"
     local found_cert=""
     local found_key=""
-    local max_retries=60 # 等待 60 次，約 2-3 分鐘
+    local max_retries=60
     local count=0
 
     log INFO "正在檢查域名 ${domain} 的 SSL 證書..."
@@ -80,7 +80,7 @@ wait_and_detect_cert() {
             return 1
         fi
 
-        # 檢查 Let's Encrypt 和 ZeroSSL (Caddy 常用的兩個 CA)
+        # 檢查 Let's Encrypt 和 ZeroSSL
         for ca_dir in "acme-v02.api.letsencrypt.org-directory" "acme.zerossl.com-v2-DV90"; do
             local cert_file="$base_path_caddy/$ca_dir/$domain/$domain.crt"
             local key_file="$base_path_caddy/$ca_dir/$domain/$domain.key"
@@ -196,13 +196,12 @@ generate_mihomo_config() {
     mkdir -p "${MIHOMO_CONFIG_DIR}"
     
     # 路徑轉換：將 Caddy 內部路徑 (/data) 轉換為 Mihomo 內部路徑 (/caddy_certs)
-    # 假設 Caddy 內部是 /data/caddy/certificates/...
-    # Mihomo 掛載是 /caddy_certs/caddy/certificates/...
     local cert_path_in_container="${cert_path/\/data/\/caddy_certs}"
     local key_path_in_container="${key_path/\/data/\/caddy_certs}"
 
     log INFO "Mihomo 證書路徑設定為: $cert_path_in_container"
 
+    # 注意：listeners 下的 tls 必須使用 cert 和 key (短命名)，而非 certificate 和 private-key
     cat > "${MIHOMO_CONFIG_FILE}" <<EOF
 log-level: info
 ipv6: true
@@ -229,8 +228,8 @@ listeners:
     password: "${password}"
     tls:
       enabled: true
-      certificate: "${cert_path_in_container}"
-      private-key: "${key_path_in_container}"
+      cert: "${cert_path_in_container}"
+      key: "${key_path_in_container}"
       alpn:
         - h3
 
@@ -312,10 +311,9 @@ manage_caddy() {
 
 update_mihomo_warp_keys() {
     [ ! -f "$MIHOMO_CONFIG_FILE" ] && { log ERROR "設定檔不存在。"; return 1; }
-    local domain; domain=$(grep 'certificate:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
+    local domain; domain=$(grep 'cert:' "$MIHOMO_CONFIG_FILE" | head -n1 | sed -E 's/.*\/([a-zA-Z0-9.-]+)\/[a-zA-Z0-9.-]+\.crt.*/\1/')
     local password; password=$(grep 'password:' "$MIHOMO_CONFIG_FILE" | head -n1 | awk '{print $2}' | tr -d '"')
     
-    # 重新獲取證書路徑以確保變數正確
     local cert_path_info; cert_path_info=$(wait_and_detect_cert "$domain")
     if [ $? -ne 0 ]; then log ERROR "無法驗證證書路徑，請檢查 Caddy。"; return 1; fi
     local cert_path="${cert_path_info%%|*}"
@@ -354,7 +352,6 @@ manage_mihomo() {
                         read -p "請輸入域名: " HY_DOMAIN < /dev/tty
                     fi
                     
-                    # --- 關鍵修正：等待證書生成 ---
                     log INFO "正在驗證證書是否存在（請耐心等待，Caddy 申請證書需要時間）..."
                     local cert_path_info
                     if ! cert_path_info=$(wait_and_detect_cert "$HY_DOMAIN"); then
@@ -362,7 +359,6 @@ manage_mihomo() {
                     fi
                     local cert_path="${cert_path_info%%|*}"
                     local key_path="${cert_path_info##*|}"
-                    # ---------------------------
 
                     local PASSWORD=$(generate_random_password)
                     log INFO "已生成密碼: ${FontColor_Yellow}${PASSWORD}${FontColor_Suffix}"
@@ -472,7 +468,7 @@ check_all_status() {
 start_menu() {
     while true; do
         check_all_status; clear
-        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.1.0)"
+        echo -e "\n${FontColor_Purple}Caddy + Mihomo 一鍵管理腳本${FontColor_Suffix} (v7.2.0)"
         echo -e " --------------------------------------------------"
         echo -e "  Caddy  服務 : ${CONTAINER_STATUSES[$CADDY_CONTAINER_NAME]}"
         echo -e "  Mihomo 服務 : ${CONTAINER_STATUSES[$MIHOMO_CONTAINER_NAME]}"
